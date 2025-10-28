@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>🔥 Stock Tracker</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: white;
+            font-family: 'Poppins', sans-serif;
+            text-align: center;
+        }
+        h1 {
+            color: #00ff99;
+            margin-top: 40px;
+        }
+        table {
+            margin: 40px auto;
+            border-collapse: collapse;
+            width: 80%;
+            background: #161b22;
+            border-radius: 10px;
+        }
+        th, td {
+            padding: 12px;
+            border-bottom: 1px solid #333;
+        }
+        th {
+            background: #00ff99;
+            color: black;
+        }
+        tr:hover {
+            background: #1f2937;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔥 Live Stock Prices 🔥</h1>
+    <table>
+        <tr>
+            <th>Symbol</th>
+            <th>Name</th>
+            <th>Price (USD)</th>
+            <th>Change (%)</th>
+        </tr>
+        {% for stock in stocks %}
+        <tr>
+            <td>{{ stock['symbol'] }}</td>
+            <td>{{ stock['name'] }}</td>
+            <td>{{ stock['price'] }}</td>
+            <td style="color: {{ 'lime' if stock['changesPercentage'] > 0 else 'red' }}">
+                {{ stock['changesPercentage'] }}%
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>
