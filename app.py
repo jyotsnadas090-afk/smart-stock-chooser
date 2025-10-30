@@ -1,132 +1,253 @@
-
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template, request, render_template_string
 import yfinance as yf
-import plotly.graph_objs as go
-import pandas as pd
+import time
+import traceback
 
 app = Flask(__name__)
 
-# --- HTML TEMPLATE ---
-HTML_TEMPLATE = """
-<!DOCTYPE html>
+# List of stocks to show on the home page (example)
+STOCKS = [
+    "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
+    "SBIN.NS","BHARTIARTL.NS","ITC.NS","BAJFINANCE.NS","HINDUNILVR.NS",
+    "ASIANPAINT.NS","AXISBANK.NS","MARUTI.NS","LT.NS","SUNPHARMA.NS",
+    "TITAN.NS","WIPRO.NS","POWERGRID.NS","NTPC.NS","TECHM.NS"
+]
+
+# Simple in-memory cache with TTL (seconds)
+CACHE = {}  # { key: (timestamp, value) }
+CACHE_TTL = 600  # 10 minutes
+
+def set_cache(key, value):
+    CACHE[key] = (time.time(), value)
+
+def get_cache(key):
+    item = CACHE.get(key)
+    if not item:
+        return None
+    ts, val = item
+    if time.time() - ts > CACHE_TTL:
+        # expired
+        try:
+            del CACHE[key]
+        except KeyError:
+            pass
+        return None
+    return val
+
+def fetch_with_retries(symbol, mode="info", retries=3):
+    """
+    mode: "info" returns fast_info dict (lightweight)
+          "history" returns historical DataFrame
+    """
+    delay = 1.0
+    for attempt in range(retries):
+        try:
+            ticker = yf.Ticker(symbol)
+            if mode == "info":
+                # use fast_info (lighter) first
+                fast = getattr(ticker, "fast_info", None)
+                if fast:
+                    return fast
+                # fallback to info (might be heavier)
+                return getattr(ticker, "info", {})
+            elif mode == "history":
+                # history might be heavier; keep it separate
+                hist = ticker.history(period="6mo")
+                return hist
+        except Exception as e:
+            # log and back off
+            print(f"Attempt {attempt+1} failed for {symbol} ({mode}): {e}")
+            traceback.print_exc()
+            time.sleep(delay)
+            delay *= 2
+    # all retries failed
+    return None
+
+def get_stock_info_cached(symbol):
+    key = f"info:{symbol}"
+    cached = get_cache(key)
+    if cached is not None:
+        return cached
+
+    info = fetch_with_retries(symbol, mode="info", retries=3)
+    if info is None:
+        # store a short-lived placeholder to avoid hammering again
+        set_cache(key, {})
+        return {}
+    set_cache(key, info)
+    return info
+
+def get_history_cached(symbol):
+    key = f"hist:{symbol}"
+    cached = get_cache(key)
+    if cached is not None:
+        return cached
+
+    hist = fetch_with_retries(symbol, mode="history", retries=2)
+    if hist is None:
+        set_cache(key, None)
+        return None
+    set_cache(key, hist)
+    return hist
+
+# Simple HTML using render_template_string for portability (you can move this to templates later)
+HOME_HTML = """
+<!doctype html>
 <html>
-<head>
-    <title>Stock Dashboard</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-    <style>
-        body { font-family: Arial; background-color: #111; color: #eee; text-align: center; }
-        a { color: #00bfff; text-decoration: none; }
-        .stock-list { margin: 30px auto; width: 80%; display: flex; flex-wrap: wrap; justify-content: center; }
-        .stock-item { background: #222; border-radius: 10px; padding: 15px; margin: 10px; width: 200px; transition: 0.3s; }
-        .stock-item:hover { background: #333; transform: scale(1.05); }
-        input { padding: 10px; width: 300px; border-radius: 5px; border: none; margin: 20px; }
-        button { padding: 10px; border: none; border-radius: 5px; background: #00bfff; color: white; cursor: pointer; }
-        .chart-container { width: 90%; margin: auto; }
-    </style>
+<head><title>Smart Stock Chooser - Senko Getsu</title>
+<style>
+body{background:#0b0c10;color:#fff;font-family:Segoe UI,Arial;text-align:center}
+.table{margin:20px auto;width:92%;border-collapse:collapse}
+th,td{padding:10px;border-bottom:1px solid #333}
+th{color:#ffd700;background:#121217}
+.pos{color:#00ff88}.neg{color:#ff6767}
+input{padding:8px;width:260px;border-radius:6px;border:none}
+button{padding:8px 12px;border-radius:6px;border:none;background:#ffd700;color:#000}
+.card{background:#151520;padding:12px;border-radius:8px;display:inline-block;margin:6px}
+</style>
 </head>
 <body>
-    <h1>📈 Indian Stock Dashboard</h1>
+<h1>Smart Stock Chooser — Senko Getsu</h1>
+<form method="GET"><input name="search" placeholder="Search symbol or name" value="{{ search|default('') }}"><button>Search</button></form>
 
-    <form method="GET" action="/">
-        <input type="text" name="search" placeholder="Search stock symbol (e.g., RELIANCE.NS)">
-        <button type="submit">Search</button>
-    </form>
-
-    {% if stocks %}
-        <div class="stock-list">
-            {% for s in stocks %}
-                <div class="stock-item">
-                    <a href="/stock/{{ s.symbol }}">
-                        <h3>{{ s.name }}</h3>
-                        <p>💰 {{ s.symbol }}</p>
-                        <p>Market Cap: ₹{{ "{:,}".format(s.market_cap) }}</p>
-                    </a>
-                </div>
-            {% endfor %}
-        </div>
-    {% elif stock %}
-        <h2>{{ stock.info['longName'] }} ({{ stock.info['symbol'] }})</h2>
-        <p>💰 Market Cap: ₹{{ "{:,}".format(stock.info.get('marketCap', 0)//10000000) }} Cr</p>
-        <p>📊 P/E Ratio: {{ stock.info.get('trailingPE', 'N/A') }}</p>
-        <p>📈 52W High: {{ stock.info.get('fiftyTwoWeekHigh', 'N/A') }}</p>
-        <p>📉 52W Low: {{ stock.info.get('fiftyTwoWeekLow', 'N/A') }}</p>
-        <p>🧾 Previous Close: {{ stock.info.get('previousClose', 'N/A') }}</p>
-        <p>📆 Open: {{ stock.info.get('open', 'N/A') }}</p>
-        <div class="chart-container" id="chart"></div>
-
-        <script>
-            var chartData = {{ chart_data | safe }};
-            Plotly.newPlot('chart', chartData.data, chartData.layout);
-        </script>
-
-        <p><a href="/">← Back to Home</a></p>
-    {% else %}
-        <p>No results found.</p>
-    {% endif %}
+{% if stocks %}
+<table class="table">
+<tr><th>Symbol</th><th>Name</th><th>Price</th><th>Market Cap (Cr)</th><th>PE</th><th>Change%</th></tr>
+{% for s in stocks %}
+<tr>
+  <td><a href="/stock/{{ s['symbol'] }}" style="color:#9ad7ff">{{ s['symbol'] }}</a></td>
+  <td>{{ s['name'] }}</td>
+  <td>{{ s['price'] }}</td>
+  <td>{{ s['market_cap'] }}</td>
+  <td>{{ s['pe'] }}</td>
+  <td class="{{ 'pos' if s['change'] is not none and s['change']>=0 else 'neg' }}">{{ s['change'] if s['change'] is not none else 'N/A' }}</td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p>No stocks to show.</p>
+{% endif %}
+<p style="color:#aaa">Data cached for {{ cache_minutes }} minutes to avoid rate limits.</p>
 </body>
 </html>
 """
 
-# --- MAIN ROUTES ---
+DETAIL_HTML = """
+<!doctype html>
+<html>
+<head><title>{{ symbol }} - Smart Stock Chooser</title>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<style>body{background:#0b0c10;color:#fff;font-family:Segoe UI,Arial;text-align:center} .box{background:#121217;padding:12px;margin:10px;border-radius:8px;display:inline-block}</style>
+</head>
+<body>
+<h1>{{ info.get('longName') or symbol }}</h1>
+<div class="box">
+<p>Market Cap: ₹{{ market_cap_cr }} Cr</p>
+<p>P/E: {{ pe }}</p>
+<p>52W High / Low: {{ week_high }} / {{ week_low }}</p>
+<p>Previous Close: {{ prev_close }}</p>
+</div>
+
+<div id="chart" style="width:90%;height:400px;margin:auto"></div>
+
+<script>
+var chartData = {{ chart_data|safe }};
+if (chartData && chartData.x.length>0) {
+    var trace = { x: chartData.x, y: chartData.y, type: 'scatter', mode:'lines', line:{color:'#00bfff'} };
+    var layout = {template:'plotly_dark', title: symbol + " - 6 month" };
+    Plotly.newPlot('chart',[trace],layout);
+} else {
+    document.getElementById('chart').innerHTML = "<p style='color:#f88'>No chart data available (rate limit or no data).</p>";
+}
+</script>
+
+<p><a href="/" style="color:#9ad7ff">← Back</a></p>
+</body>
+</html>
+"""
 
 @app.route("/")
 def home():
-    search = request.args.get("search")
-    if search:
-        try:
-            stock = yf.Ticker(search)
-            return render_template_string(HTML_TEMPLATE, stock=stock, chart_data={})
-        except Exception:
-            return render_template_string(HTML_TEMPLATE, stocks=None, stock=None)
-    else:
-        # Example Indian stocks list
-        symbols = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", 
-                   "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "BAJFINANCE.NS", "HINDUNILVR.NS", 
-                   "ASIANPAINT.NS", "AXISBANK.NS", "MARUTI.NS", "LT.NS", "SUNPHARMA.NS",
-                   "DMART.NS", "TITAN.NS", "WIPRO.NS", "POWERGRID.NS", "NTPC.NS"]
+    search = (request.args.get("search") or "").strip()
+    stocks_to_show = STOCKS.copy()
 
-        stocks = []
-        for sym in symbols:
-            data = yf.Ticker(sym)
-            info = data.info
-            stocks.append({
-                "symbol": sym,
-                "name": info.get("shortName", sym),
-                "market_cap": info.get("marketCap", 0)//10000000
-            })
+    results = []
+    for sym in stocks_to_show:
+        info = get_stock_info_cached(sym)
+        # info may be {} if failed; handle gracefully
+        name = info.get("longName") or info.get("shortName") or sym
+        price = info.get("last_price") or info.get("last_price") if info else None
+        # fast_info often has lastPrice or last_price/last_close variations, try multiple keys:
+        price = price or info.get("last_price") or info.get("last_close") or info.get("lastTradePrice") or info.get("price") or None
+        # fallback: try history quick get (not recommended repeatedly)
+        if price is None:
+            try:
+                hist = get_history_cached(sym)
+                if hist is not None and not hist.empty:
+                    price = round(float(hist['Close'].iat[-1]),2)
+            except Exception:
+                price = None
 
-        stocks = sorted(stocks, key=lambda x: x["market_cap"], reverse=True)
-        return render_template_string(HTML_TEMPLATE, stocks=stocks, stock=None)
+        market_cap = info.get("market_cap") or info.get("marketCap") or 0
+        # normalize market cap to Crores (Cr)
+        market_cap_cr = round((market_cap or 0) / 1e7, 2)
+
+        pe = info.get("trailingPE") or info.get("pe") or "N/A"
+        change = info.get("regularMarketChangePercent") if info.get("regularMarketChangePercent") is not None else None
+
+        entry = {
+            "symbol": sym,
+            "name": name,
+            "price": price or "N/A",
+            "market_cap": market_cap_cr,
+            "pe": pe,
+            "change": round(change,2) if isinstance(change,(int,float)) else None
+        }
+
+        # filter by search if provided
+        if search:
+            if search.upper() in sym or search.upper() in (name or "").upper():
+                results.append(entry)
+        else:
+            results.append(entry)
+
+    # sort by market cap desc and pick top 20
+    results = sorted(results, key=lambda x: x.get("market_cap") or 0, reverse=True)[:20]
+
+    return render_template_string(HOME_HTML, stocks=results, search=search, cache_minutes=CACHE_TTL//60)
 
 @app.route("/stock/<symbol>")
 def stock_detail(symbol):
-    stock = yf.Ticker(symbol)
-    hist = stock.history(period="6mo")
+    symbol = symbol.upper()
+    info = get_stock_info_cached(symbol) or {}
+    hist = get_history_cached(symbol)
 
-    if hist.empty:
-        return render_template_string(HTML_TEMPLATE, stock=stock, chart_data={})
+    # prepare chart data
+    chart_data = {"x": [], "y": []}
+    if hist is not None and not getattr(hist, "empty", True):
+        # convert index to isoformat strings for JS
+        chart_data["x"] = [str(idx.date()) if hasattr(idx, "date") else str(idx) for idx in hist.index]
+        chart_data["y"] = [round(float(v),2) for v in hist["Close"].tolist()]
 
-    # Create Plotly chart
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=hist.index,
-        y=hist["Close"],
-        mode="lines",
-        name="Close Price",
-        line=dict(color="#00bfff")
-    ))
+    market_cap = info.get("market_cap") or info.get("marketCap") or 0
+    market_cap_cr = round((market_cap or 0) / 1e7, 2)
+    pe = info.get("trailingPE") or info.get("pe") or "N/A"
+    week_high = info.get("fiftyTwoWeekHigh", "N/A")
+    week_low = info.get("fiftyTwoWeekLow", "N/A")
+    prev_close = info.get("previousClose", info.get("last_close", "N/A"))
 
-    fig.update_layout(
-        title=f"{symbol} - Last 6 Months",
-        xaxis_title="Date",
-        yaxis_title="Price (₹)",
-        template="plotly_dark",
-        margin=dict(l=20, r=20, t=40, b=20)
-    )
-
-    chart_data = {"data": fig.to_plotly_json()["data"], "layout": fig.to_plotly_json()["layout"]}
-
-    return render_template_string(HTML_TEMPLATE, stock=stock, chart_data=chart_data)
+    return render_template_string(DETAIL_HTML,
+                                  symbol=symbol,
+                                  info=info,
+                                  chart_data=chart_data,
+                                  market_cap_cr=market_cap_cr,
+                                  pe=pe,
+                                  week_high=week_high,
+                                  week_low=week_low,
+                                  prev_close=prev_close)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    print("Starting Smart Stock Chooser on 0.0.0.0:%s" % port)
+    app.run(host="0.0.0.0", port=port)
