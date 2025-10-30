@@ -2,57 +2,115 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>🔥 Stock Tracker</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Stock Chooser – Senko Getsu</title>
     <style>
         body {
-            background-color: #0d1117;
-            color: white;
-            font-family: 'Poppins', sans-serif;
+            font-family: 'Segoe UI', sans-serif;
+            background: #0b0c10;
+            color: #fff;
             text-align: center;
+            margin: 0;
+            padding: 0;
         }
-        h1 {
-            color: #00ff99;
-            margin-top: 40px;
+        header {
+            background: linear-gradient(90deg, #141e30, #243b55);
+            padding: 20px;
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #f9d71c;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        form {
+            margin: 20px;
+        }
+        input[type="text"] {
+            padding: 10px;
+            width: 300px;
+            border-radius: 10px;
+            border: none;
+            outline: none;
+            font-size: 1em;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            background: #f9d71c;
+            color: #000;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        button:hover {
+            background: #ffd700;
         }
         table {
-            margin: 40px auto;
+            margin: 20px auto;
             border-collapse: collapse;
-            width: 80%;
-            background: #161b22;
-            border-radius: 10px;
+            width: 90%;
         }
         th, td {
-            padding: 12px;
+            padding: 10px;
             border-bottom: 1px solid #333;
         }
         th {
-            background: #00ff99;
-            color: black;
+            background: #1f2833;
+            color: #66fcf1;
         }
         tr:hover {
-            background: #1f2937;
+            background: #16213e;
+        }
+        .pos {
+            color: #00ff88;
+        }
+        .neg {
+            color: #ff5555;
+        }
+        footer {
+            padding: 15px;
+            background: #1f2833;
+            color: #888;
+            font-size: 0.9em;
+            margin-top: 40px;
         }
     </style>
 </head>
 <body>
-    <h1>🔥 Live Stock Prices 🔥</h1>
+    <header>📊 Smart Stock Chooser – Senko Getsu</header>
+
+    <form method="POST">
+        <input type="text" name="query" placeholder="Search for a stock..." value="{{ query }}">
+        <button type="submit">🔍 Search</button>
+    </form>
+
     <table>
         <tr>
             <th>Symbol</th>
             <th>Name</th>
-            <th>Price (USD)</th>
+            <th>Price (₹)</th>
+            <th>Market Cap (Cr)</th>
+            <th>PE Ratio</th>
+            <th>52W High</th>
+            <th>52W Low</th>
             <th>Change (%)</th>
         </tr>
-        {% for stock in stocks %}
+        {% for s in stocks %}
         <tr>
-            <td>{{ stock['symbol'] }}</td>
-            <td>{{ stock['name'] }}</td>
-            <td>{{ stock['price'] }}</td>
-            <td style="color: {{ 'lime' if stock['changesPercentage'] > 0 else 'red' }}">
-                {{ stock['changesPercentage'] }}%
-            </td>
+            <td><b>{{ s.symbol }}</b></td>
+            <td>{{ s.name }}</td>
+            <td>{{ s.price }}</td>
+            <td>{{ s.market_cap }}</td>
+            <td>{{ s.pe_ratio }}</td>
+            <td>{{ s.week_high }}</td>
+            <td>{{ s.week_low }}</td>
+            <td class="{{ 'pos' if s.change >= 0 else 'neg' }}">{{ s.change }}%</td>
         </tr>
         {% endfor %}
     </table>
+
+    <footer>© 2025 Smart Stock Chooser – Senko Getsu | Built with 💛 Flask + yFinance</footer>
 </body>
 </html>
+
